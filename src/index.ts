@@ -9,23 +9,14 @@ const serviceName = "opencode-auto-continue";
 export default Plugin.define({
   id: serviceName,
   setup: async (ctx) => {
+    // opencode 2 runs setup once per working directory, so this is the session's directory.
     const directory = ctx.location.directory;
     const sessionStateStore = createSessionStateStore();
 
-    // Config comes from <dir>/.opencode/auto-continue.json(c), searching the session's working
-    // directory first, then the plugin's location directory. opencode.jsonc plugin options
-    // (ctx.options) override the file when present.
-    const getConfig = async (sessionID: Parameters<typeof onIdle>[0]): Promise<PluginConfig> => {
-      const dirs: string[] = [];
-      try {
-        const info = await ctx.session.get({ sessionID });
-        const sessionDir = info?.location?.directory;
-        if (sessionDir) dirs.push(sessionDir);
-      } catch {
-        // fall through to the plugin location directory
-      }
-      if (!dirs.includes(directory)) dirs.push(directory);
-      const base = loadConfig(dirs);
+    // Config comes from <directory>/.opencode/auto-continue.json(c), with opencode.jsonc plugin
+    // options (ctx.options) overriding the file when present.
+    const getConfig = async (): Promise<PluginConfig> => {
+      const base = loadConfig([directory]);
       const o = ctx.options as Partial<PluginConfig> | undefined;
       if (!o || typeof o !== "object") return base;
       return {
@@ -40,21 +31,39 @@ export default Plugin.define({
     const onIdle = createIdleHandler({ ctx, getConfig, sessionStateStore });
 
     const abort = new AbortController();
-    void (async () => {
-      try {
-        for await (const ev of ctx.event.subscribe({ signal: abort.signal })) {
-          if (ev.type === "session.deleted") {
-            sessionStateStore.cleanup(ev.data.sessionID);
-          } else if (ev.type === "session.idle") {
-            await onIdle(ev.data.sessionID);
-          }
+
+    // opencode 2 does not push session.idle to plugin event subscribers, so idle is detected with
+    // session.wait(), armed whenever a prompt (user or auto-continue) starts a turn.
+    const waiting = new Set<string>();
+    const armWait = (sessionID: Parameters<typeof onIdle>[0]): void => {
+      const key = String(sessionID);
+      if (waiting.has(key)) return;
+      waiting.add(key);
+      void (async () => {
+        try {
+          await new Promise((r) => setTimeout(r, 1000)); // let the agent loop start first
+          if (abort.signal.aborted) return;
+          await ctx.session.wait({ sessionID });
+        } catch (err) {
+          console.error(`[${serviceName}] wait error: ${String(err)}`);
+          return;
+        } finally {
+          waiting.delete(key);
         }
-      } catch (err) {
-        if (!abort.signal.aborted) {
-          console.error(`[${serviceName}] event subscription error: ${String(err)}`);
+        try {
+          await onIdle(sessionID);
+        } catch (err) {
+          console.error(`[${serviceName}] idle handler error: ${String(err)}`);
         }
-      }
-    })();
+      })();
+    };
+
+    ctx.session.hook("prompt", async (event) => {
+      const state = sessionStateStore.getState(event.sessionID);
+      // A prompt we did not send is a real user message: restart the consecutive count.
+      if (!state.inFlight) sessionStateStore.resetConsecutive(event.sessionID);
+      armWait(event.sessionID);
+    });
 
     return () => abort.abort();
   },
