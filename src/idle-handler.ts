@@ -33,13 +33,13 @@ function hasRealUserMessageAfterLastContinue(
 
 export function createIdleHandler(args: {
   ctx: Ctx;
-  getConfig: () => PluginConfig;
+  getConfig: (sessionID: SessionID) => Promise<PluginConfig>;
   sessionStateStore: SessionStateStore;
 }): (sessionID: SessionID) => Promise<void> {
   const { ctx, getConfig, sessionStateStore } = args;
 
   async function injectContinuation(sessionID: SessionID): Promise<void> {
-    const config = getConfig();
+    const config = await getConfig(sessionID);
     if (!config.enabled) return;
 
     const state = sessionStateStore.getState(sessionID);
@@ -77,7 +77,7 @@ export function createIdleHandler(args: {
   }
 
   return async function onIdle(sessionID: SessionID): Promise<void> {
-    const config = getConfig();
+    const config = await getConfig(sessionID);
     if (!config.enabled) return;
 
     const state = sessionStateStore.getState(sessionID);

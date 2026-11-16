@@ -25,8 +25,15 @@ function parseConfigFile(filePath: string): Partial<PluginConfig> {
   return JSON.parse(cleaned) as Partial<PluginConfig>
 }
 
-export function loadConfig(directory: string): PluginConfig {
-  const configPath = findConfigFile(directory)
+const warned = new Set<string>()
+
+// First directory in the list with a .opencode/auto-continue.json(c) wins.
+export function loadConfig(directories: readonly string[]): PluginConfig {
+  let configPath: string | null = null
+  for (const directory of directories) {
+    configPath = findConfigFile(directory)
+    if (configPath) break
+  }
   if (!configPath) return { ...DEFAULT_CONFIG }
 
   try {
@@ -37,7 +44,11 @@ export function loadConfig(directory: string): PluginConfig {
       cooldown_ms: parsed.cooldown_ms ?? DEFAULT_CONFIG.cooldown_ms,
       max_consecutive: parsed.max_consecutive ?? DEFAULT_CONFIG.max_consecutive,
     }
-  } catch {
+  } catch (err) {
+    if (!warned.has(configPath)) {
+      warned.add(configPath)
+      console.error(`[opencode-auto-continue] failed to parse ${configPath}: ${String(err)}`)
+    }
     return { ...DEFAULT_CONFIG }
   }
 }

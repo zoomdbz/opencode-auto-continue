@@ -12,10 +12,20 @@ export default Plugin.define({
     const directory = ctx.location.directory;
     const sessionStateStore = createSessionStateStore();
 
-    // Config comes from <project>/.opencode/auto-continue.json(c), with opencode.jsonc plugin
-    // options (ctx.options) overriding the file when present.
-    const getConfig = (): PluginConfig => {
-      const base = loadConfig(directory);
+    // Config comes from <dir>/.opencode/auto-continue.json(c), searching the session's working
+    // directory first, then the plugin's location directory. opencode.jsonc plugin options
+    // (ctx.options) override the file when present.
+    const getConfig = async (sessionID: Parameters<typeof onIdle>[0]): Promise<PluginConfig> => {
+      const dirs: string[] = [];
+      try {
+        const info = await ctx.session.get({ sessionID });
+        const sessionDir = info?.location?.directory;
+        if (sessionDir) dirs.push(sessionDir);
+      } catch {
+        // fall through to the plugin location directory
+      }
+      if (!dirs.includes(directory)) dirs.push(directory);
+      const base = loadConfig(dirs);
       const o = ctx.options as Partial<PluginConfig> | undefined;
       if (!o || typeof o !== "object") return base;
       return {
